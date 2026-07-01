@@ -1,0 +1,42 @@
+# GitHub Actions — 꿀템연구소 6컷 만화 자동 포스팅
+# 저장 위치: .github/workflows/comic_post.yml
+# 매일 낮 12시 (한국시간) 만화 게시
+
+name: 꿀템연구소 만화 포스팅
+
+on:
+  schedule:
+    - cron: '0 3 * * *'    # 한국 낮 12시 (UTC 03:00)
+  workflow_dispatch:        # 수동 실행 버튼
+
+jobs:
+  comic:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write       # GitHub 이미지 업로드에 필요
+
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 한국어 폰트 설치
+        run: sudo apt-get install -y fonts-nanum
+
+      - name: 패키지 설치
+        run: pip install anthropic requests pillow
+
+      - name: 만화 포스팅 실행
+        env:
+          CLAUDE_API_KEY:       ${{ secrets.CLAUDE_API_KEY }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          THREADS_USER_ID:      ${{ secrets.THREADS_USER_ID }}
+          GITHUB_TOKEN:         ${{ secrets.GITHUB_TOKEN }}
+          NAVER_CLIENT_ID:      ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET:  ${{ secrets.NAVER_CLIENT_SECRET }}
+        run: python comic_poster.py
