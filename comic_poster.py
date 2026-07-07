@@ -145,29 +145,35 @@ def generate_script(category: dict, products: list[dict]) -> dict:
     product_block = naver_shopping.format_for_prompt(products)
 
     prompt = f"""
-너는 '꿀템연구소' 스레드용 6컷 웹툰 작가야.
+너는 '꿀템연구소' 연구원 캐릭터의 6컷 웹툰 작가야.
+캐릭터 설정: 소비생활 덕후 연구원. 쿨하고 솔직함. 실패도 공유함. 광고 아님.
 카테고리: {category['name']}
 
-{f"오늘 네이버 쇼핑 실제 인기 상품:{chr(10)}{product_block}" if product_block else ""}
+{f"오늘 네이버 쇼핑 실제 상품:{chr(10)}{product_block}" if product_block else ""}
 
-아래 JSON 형식으로만 출력해. 설명 없이 JSON만.
+아래 JSON만 출력해. 설명 없이.
 
-흐름: 1공감오프닝 → 2문제공감 → 3위기/충격 → 4해결책등장 → 5상품구체소개 → 6마무리CTA
+[웹툰 대사 작성 규칙]
+- 실제 20대가 혼잣말하듯 써 (속마음, 리얼 반응)
+- 연구원 캐릭터라서 "가설", "실험", "연구 결과" 유머 가능
+- "ㄹㅇ", "팩트", "근데 진짜", "반박불가" 자연스럽게
+- 광고 느낌 대사 절대 금지: "추천", "강추", "놓치지 마", "클릭"
+- crisis 컷: 독자가 "아 맞아 나도..." 하는 공감 팩폭 한 방
+- 각 컷 대사는 짧고 임팩트있게 (최대 25자)
 
-각 text는 실제 웹툰 말풍선/나레이션 대사처럼 짧고 임팩트있게 (최대 30자).
-위기컷(crisis)은 나레이션 박스 스타일로 충격적인 한 문장.
+흐름: 1일상공감 → 2문제터짐 → 3팩폭/충격 → 4발견 → 5상품+가격 → 6찐후기CTA
 
 {{
-  "title": "15자 이내 제목",
+  "title": "클릭하고 싶은 제목 (15자이내, 숫자나 반전 활용)",
   "panels": [
-    {{"type": "intro",    "text": "공감 오프닝 대사 (25자이내)", "has_char": true}},
-    {{"type": "problem",  "text": "문제 상황 대사 (25자이내)",  "has_char": true}},
-    {{"type": "crisis",   "text": "충격 한 줄 (20자이내)",       "has_char": false}},
-    {{"type": "reveal",   "text": "해결책 발견 대사 (25자이내)", "has_char": true}},
-    {{"type": "solution", "text": "상품명+가격 설명 (30자이내)","has_char": false}},
-    {{"type": "cta",      "text": "마무리 + 유도 (25자이내)",   "has_char": true}}
+    {{"type": "intro",    "text": "일상 공감 혼잣말 (20자이내)", "has_char": true}},
+    {{"type": "problem",  "text": "문제 상황 리얼 반응 (22자이내)", "has_char": true}},
+    {{"type": "crisis",   "text": "팩폭 한 방 나레이션 (20자이내)", "has_char": false}},
+    {{"type": "reveal",   "text": "발견 순간 리얼 반응 (22자이내)", "has_char": true}},
+    {{"type": "solution", "text": "상품명 + 가격 + 한줄평 (28자이내)", "has_char": false}},
+    {{"type": "cta",      "text": "찐후기 마무리 (20자이내)", "has_char": true}}
   ],
-  "caption": "스레드 본문 (150자, 반말, 마지막줄: 링크는 댓글에 👇)",
+  "caption": "스레드 본문 (150자, 20대 혼잣말체, 실패담 or 반전 포함, 마지막: 링크는 댓글에 👇)",
   "product_highlight": "핵심상품명 15자이내"
 }}
 """
