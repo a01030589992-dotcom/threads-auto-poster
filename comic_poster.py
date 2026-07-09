@@ -43,7 +43,7 @@ IMAGE_QUALITY   = os.environ.get("IMAGE_QUALITY", "medium")
 MAX_RETRIES     = int(os.environ.get("MAX_PANEL_RETRIES", "2"))
 DAILY_IMG_LIMIT = int(os.environ.get("DAILY_IMAGE_LIMIT", "24"))
 AUTO_PUBLISH    = os.environ.get("AUTO_PUBLISH", "false").lower() == "true"
-GITHUB_REPO     = "a01030589992-dotcom/threads-auto-poster"
+GITHUB_REPO     = "withmenlyn12212/threads-auto-poster"
 GITHUB_BRANCH   = "main"
 
 def _validate_env():
