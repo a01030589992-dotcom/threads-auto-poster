@@ -6,11 +6,12 @@ __pycache__/
 .env
 venv/
 
-# 생성된 웹툰 결과물 (전체 보관)
-generated_comics/*/private_product.json
-generated_comics/*/public_story_input.json
+# Generated posting/comic outputs
+generated_comics/
+comic_panels/
+images/
 
-# 개발용 dry-run 이미지
+# Development dry-run images
 dry_run_*.png
 
 # OS

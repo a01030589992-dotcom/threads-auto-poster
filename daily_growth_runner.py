@@ -78,8 +78,11 @@ def md_path(d: str = TODAY) -> Path:
 def load_log(d: str = TODAY) -> dict:
     p = log_path(d)
     if p.exists():
-        with open(p, encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            print(f"  ⚠️  로그 파일 손상 ({d}.json) — 초기화")
     return {
         "date": d,
         "posts": [],
