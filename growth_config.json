@@ -1,0 +1,30 @@
+{
+  "schedule": {
+    "emotional_post_time": "08:00",
+    "engagement_prep_time": "12:30",
+    "webtoon_post_time": "20:30"
+  },
+  "emotional_post": {
+    "enabled": true,
+    "topics_cycle": [
+      "집안일의 작은 불편함",
+      "정리와 수납의 순간",
+      "자취 생활의 솔직한 하루",
+      "주방에서 생기는 작은 스트레스",
+      "계절이 바뀔 때 생기는 생활 변화",
+      "편리함의 조용한 발견",
+      "반복되는 생활 패턴과 습관"
+    ]
+  },
+  "engagement": {
+    "enabled": true,
+    "candidate_count": 5,
+    "keywords": ["살림", "자취", "집정리", "생활꿀팁", "주방", "미니멀라이프", "오늘의불편", "집안일"]
+  },
+  "safety": {
+    "max_affiliate_posts_per_day": 1,
+    "avoid_same_category_days": 2,
+    "duplicate_check_days": 7
+  },
+  "auto_publish": false
+}
