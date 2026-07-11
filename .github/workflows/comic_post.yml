@@ -29,11 +29,12 @@ jobs:
         run: sudo apt-get install -y fonts-nanum
 
       - name: 패키지 설치
-        run: pip install anthropic requests pillow
+        run: pip install anthropic openai requests pillow
 
       - name: 만화 포스팅 실행
         env:
           CLAUDE_API_KEY:       ${{ secrets.CLAUDE_API_KEY }}
+          OPENAI_API_KEY:       ${{ secrets.OPENAI_API_KEY }}
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
           THREADS_USER_ID:      ${{ secrets.THREADS_USER_ID }}
           GITHUB_TOKEN:         ${{ secrets.GITHUB_TOKEN }}
