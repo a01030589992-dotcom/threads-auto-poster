@@ -20,6 +20,7 @@ SCRIPT_ONLY   = "--script-only"        in _ARGS
 GEN_REFERENCE = "--generate-reference" in _ARGS
 SKIP_IMG_API  = "--skip-image-api"     in _ARGS
 QA_ONLY       = "--quality-check-only" in _ARGS
+HOOK_DRY_RUN  = "--hook-dry-run"       in _ARGS   # v5.1: 훅 후보만 검토
 PRODUCT_INDEX = next(
     (int(a.split("=")[1]) for a in _ARGS if a.startswith("--product-index=")), None
 )
@@ -220,12 +221,88 @@ def score_dialogue(script) -> int:
     if not any(t in lines[last_idx] for t in HOOK_TOKENS_8): score -= 20
     return score
 
-# ── 대본 생성 (Claude) — 8컷 확장 스키마, 장면 먼저 ──────────
-def generate_script(cat, products, anon_data):
+# ── 훅 후보 생성 + 점수화 (v5.1) ──────────────────────────────
+RISK_KEYWORDS = [
+    "성기능","정력","발기","관계","약효","치료","질병","의학",
+    "살 빠","우울증","불면증","복용","효과","개선","먹었더니 변화",
+]
+
+def _is_risk_safe(hook_text: str) -> bool:
+    return not any(k in hook_text for k in RISK_KEYWORDS)
+
+def generate_hook_candidates(cat: dict, anon_data: dict) -> dict:
+    """훅 후보 20개 생성 → 점수화 → 상위 3개 반환"""
     client = anthropic.Anthropic(api_key=_ENV["CLAUDE_API_KEY"])
+    prompt = f"""너는 Threads용 생활 개그툰 훅 작가다.
+
+목표:
+- 착한 꿀팁 글이 아니라 살짝 매운 생활 개그 훅을 만든다.
+- 직접적인 선정성, 성기능 암시, 약효/질병/치료 표현은 절대 금지.
+- 오해될 듯 시작해도 반드시 청소/수납/냄새/정리 등 생활 개그로 회수한다.
+
+상품군: {cat['name']}
+생활 불편: {anon_data['problem_area']} ({anon_data['location']})
+매운맛 레벨: 2~3
+
+아래 공식 중 2~3개를 골라 후보 20개를 만들어라:
+1. 오해 유도 후 생활 개그 회수 ("이거 설치한 날 와이프가 밤새 방을 뒤집었다 / 정리하느라.")
+2. 돈 낭비 자책 ("내가 산 건 수납함이 아니라 죄책감 보관함이었다")
+3. 가족/배우자 반응 과장 ("엄마가 방 보고 말없이 문을 닫았다")
+4. 생활 불편 의인화 ("바닥이 오늘도 졌다", "냄새가 집주인 행세함")
+5. 금지/경고형 ("수납함 또 사기 전에 봐")
+
+각 후보 점수 기준 (각 1~5점):
+- scroll_stop: 첫 줄에서 멈추는가
+- curiosity: 댓글 확인하고 싶어지는가
+- comedy: 생활 개그로 회수되는가
+- relatability: 자취/살림 공감
+- ad_smell_low: 광고 냄새 적음
+- risk_safe: 성기능/약효/노골성 없음 (이게 2 이하면 탈락)
+
+JSON만 출력:
+{{"selected_formulas":["공식1","공식2"],
+"candidates":[
+  {{"hook":"훅 문장 (1~3줄)","reveal":"생활 개그 회수 방향","spice_level":2,
+    "scores":{{"scroll_stop":4,"curiosity":4,"comedy":4,"relatability":4,"ad_smell_low":4,"risk_safe":5}},
+    "total":25,"risk_note":"위험 요소 없음"}}
+],
+"top3":[0,1,2]}}"""
+
+    msg = client.messages.create(
+        model="claude-sonnet-4-6", max_tokens=4000,
+        messages=[{"role":"user","content":prompt}],
+    )
+    raw = msg.content[0].text.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not m:
+        raise ValueError(f"훅 후보 JSON 파싱 실패:\n{raw[:300]}")
+    try:
+        data = json.loads(m.group())
+    except json.JSONDecodeError:
+        fixed = re.sub(r",\s*([}\]])", r"\1", m.group())
+        data = json.loads(fixed)
+
+    # 안전 필터 추가 적용
+    candidates = data.get("candidates", [])
+    safe = [c for c in candidates if _is_risk_safe(c.get("hook",""))
+            and c.get("scores",{}).get("risk_safe",0) > 2
+            and c.get("scores",{}).get("ad_smell_low",0) > 2
+            and c.get("total",0) >= 20]
+    safe.sort(key=lambda c: c.get("total",0), reverse=True)
+    data["safe_candidates"] = safe
+    data["best_hook"] = safe[0]["hook"] if safe else (candidates[0]["hook"] if candidates else "")
+    return data
+
+# ── 대본 생성 (Claude) — 8컷 확장 스키마, 장면 먼저 ──────────
+def generate_script(cat, products, anon_data, hook: str = ""):
+    client = anthropic.Anthropic(api_key=_ENV["CLAUDE_API_KEY"])
+    hook_line = f"\n[선택된 훅 — 반드시 이 톤/방향으로 1컷 대사 작성]\n{hook}\n" if hook else ""
     prompt = f"""너는 꿀템연구소 8컷 생활 개그툰 작가야.
-이번 웹툰은 정보 설명용 광고가 아니라 짧은 생활 개그툰이다.
+이번 웹툰은 착한 꿀팁 광고가 아니라 살짝 매운 생활 개그툰이다.
 장소: {anon_data['location']} / 불편: {anon_data['problem_area']} / 카테고리: {cat['name']}
+{hook_line}
 
 [생성 순서 — 반드시 이 순서로 생각할 것]
 1. 웃긴 상황 한 줄 떠올리기
@@ -311,12 +388,14 @@ JSON만 출력 (설명 없이):
 # v5: 개그툰 스타일 강화, 캐릭터 일관성 고정
 _CHAR_BASE = (
     "expressive Korean slice-of-life comedy webtoon panel, "
+    "spicy social media comic tone, "
     "high quality polished commercial illustration, "
     "SAME Korean male character in his 20s: round glasses, black hair, beige knit sweater, "
     "consistent character design throughout all panels, "
-    "clean thick outline, warm but high-contrast colors, "
-    "exaggerated facial acting and comic reaction poses, "
-    "detailed cluttered home background, "
+    "clean thick bold outline, warm but high-contrast colors, "
+    "exaggerated facial acting: big eyes, sweat drops, shocked open mouth, "
+    "dynamic over-the-top reaction poses, "
+    "slightly chaotic detailed home background, "
     "clear foreground-midground-background separation, "
     "mobile-readable composition, "
     "strong visual gag, dramatic lighting, "
@@ -864,10 +943,10 @@ def main():
 
     mode = "DRY-RUN" if DRY_RUN else "실제 게시"
     print(f"\n{'='*60}")
-    print(f"꿀템연구소 미스터리 웹툰 v5.0 [{mode}]")
+    print(f"꿀템연구소 미스터리 웹툰 v5.1 [{mode}]")
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"   모델: {IMAGE_MODEL} / 품질: {IMAGE_QUALITY}")
-    print(f"   레이아웃: 2열 {GRID_COLS}×{GRID_ROWS} 그리드 ({_COL_W}×{_ROW_H}px/컷)")
+    print(f"   레이아웃: 2열 {GRID_COLS}x{GRID_ROWS} 그리드 ({_COL_W}x{_ROW_H}px/컷)")
     print(f"{'='*60}")
 
     now = datetime.now()
@@ -876,9 +955,9 @@ def main():
     product_id = re.sub(r"\W+","-",cat["name"].lower())
     output_dir = COMICS_DIR / f"{now.strftime('%Y-%m-%d')}_{product_id}"
     output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"\n카테고리: {cat['name']}")
+    print(f"\nCategory: {cat['name']}")
 
-    print(f"\n네이버 쇼핑 수집 중... [{cat['naver_query']}]")
+    print(f"\nNaver shopping [{cat['naver_query']}]...")
     products = naver_shopping.fetch_products(cat["naver_query"], count=5)
     pname    = products[0]["name"] if products else "생활 아이템"
 
@@ -898,29 +977,48 @@ def main():
     (output_dir/"public_story_input.json").write_text(
         json.dumps(anon_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print("\n익명화 대본 생성 중...")
+    # v5.1: 훅 후보 생성 → 점수화 → 베스트 선택
+    print("\n훅 후보 생성 중 (20개 → 점수화)...")
+    best_hook = ""
+    try:
+        hook_data = generate_hook_candidates(cat, anon_data)
+        safe = hook_data.get("safe_candidates", [])
+        best_hook = hook_data.get("best_hook", "")
+        (output_dir / "hook_candidates.json").write_text(
+            json.dumps(hook_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"  안전 후보: {len(safe)}개 / 베스트 훅: {best_hook[:40]}...")
+        for i, c in enumerate(safe[:3], 1):
+            print(f"    [{i}위] total={c.get('total',0)} | {c.get('hook','')[:50]}")
+    except Exception as e:
+        print(f"  훅 후보 생성 실패 (기본 흐름으로 진행): {e}")
+
+    if HOOK_DRY_RUN:
+        print("\n[hook-dry-run] 훅 후보 확인 완료. 이미지 생성 없음.")
+        print(f"  저장: {output_dir}/hook_candidates.json")
+        return
+
+    print("\n대본 생성 중...")
     SCRIPT_RETRY = 2
     script = None
     for s_attempt in range(SCRIPT_RETRY + 1):
-        script = generate_script(cat, products, anon_data)
+        script = generate_script(cat, products, anon_data, hook=best_hook)
         dscore = score_dialogue(script)
         if dscore >= 65:
-            print(f"  대사 점수: {dscore}/100 ✅")
+            print(f"  대사 점수: {dscore}/100 OK")
             break
         if s_attempt < SCRIPT_RETRY:
-            print(f"  대사 점수 낮음({dscore}/100) — 재생성 시도 ({s_attempt+1}/{SCRIPT_RETRY})")
+            print(f"  대사 점수 낮음({dscore}/100) 재생성 ({s_attempt+1}/{SCRIPT_RETRY})")
         else:
-            print(f"  대사 점수: {dscore}/100 ⚠️ (최대 재시도 도달)")
+            print(f"  대사 점수: {dscore}/100 (최대 재시도)")
     (output_dir/"script.json").write_text(
         json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
     panels = script.get("panels",[])
     print(f"  컷 수: {len(panels)}")
     for i,p in enumerate(panels,1):
-        intent = p.get("dialogue_intent","")
-        print(f"    [{i}] {p.get('type',''):10s}| {p.get('shot_type','?'):12s}| {p.get('bubble_anchor','?'):14s}| {p.get('text','')}  ({intent})")
+        print(f"    [{i}] {p.get('type',''):10s}| {p.get('shot_type','?'):12s}| {p.get('text','')}")
 
     if SCRIPT_ONLY:
-        print("\n[script-only] 대본 완료.")
+        print("\n[script-only] 완료.")
         return
 
     # 캐릭터 기준표
@@ -932,7 +1030,7 @@ def main():
         ref_b64 = base64.b64encode(REFERENCE_PATH.read_bytes()).decode()
         print(f"\n  캐릭터 기준표 로드: {REFERENCE_PATH.name}")
 
-    # 컷 생성 (8컷)
+    # 8컷 이미지 생성
     print("\n8컷 이미지 생성 중...")
     panel_paths, failed = [], []
     for idx, panel in enumerate(panels[:8]):
@@ -953,12 +1051,11 @@ def main():
     final_path = output_dir / "final_webtoon.png"
     compose_webtoon(script, panel_paths, final_path, fonts)
 
-    # v5: 본문 = 훅 문장만 (고지 없음), 댓글 = 상품+링크+고지
+    # v5: 본문 = 훅 문장만, 댓글 = 상품+링크+고지
     base_cap = script.get("caption", "").strip()
-    # 광고 고지가 실수로 포함됐으면 제거
     base_cap = re.sub(r"※.*수수료.*", "", base_cap, flags=re.DOTALL).strip()
-    hook     = random.choice(BODY_HOOKS)
-    caption  = base_cap if base_cap else hook
+    hook_for_caption = best_hook.split("\n")[0] if best_hook else ""
+    caption = base_cap if base_cap else (hook_for_caption or random.choice(BODY_HOOKS))
 
     raw_cmnt = script.get("comment_body", "👇 물음표의 정체\n[PRODUCT]\n[LINK]")
     comment  = (
@@ -969,14 +1066,14 @@ def main():
     )
     (output_dir / "post_body.txt").write_text(caption, encoding="utf-8")
     (output_dir / "comment.txt").write_text(comment, encoding="utf-8")
-    print(f"\n본문 미리보기:\n{'─'*44}\n{caption}\n{'─'*44}")
-    print(f"\n댓글 미리보기:\n{'─'*44}\n{comment}\n{'─'*44}")
+    print(f"\n본문:\n{'─'*44}\n{caption}\n{'─'*44}")
+    print(f"\n댓글:\n{'─'*44}\n{comment}\n{'─'*44}")
 
     # 품질검사
     print("\n품질검사 실행 중...")
     qa = run_quality_check(final_path, script, panel_paths, private_product, output_dir)
     if failed:
-        qa["status"]="failed"
+        qa["status"] = "failed"
         qa["errors"].append(f"생성 실패 컷: {[i+1 for i in failed]}")
 
     if QA_ONLY:
@@ -984,7 +1081,7 @@ def main():
         return
 
     if qa["status"] == "failed":
-        print("\n품질검사 실패 — 게시 중단. quality_report.json 확인.")
+        print("\n품질검사 실패 — 게시 중단.")
         return
 
     if DRY_RUN:
@@ -1005,16 +1102,17 @@ def main():
     print("\nThreads 게시 중...")
     pid = post_image_to_threads(raw_url, caption)
     if not pid:
-        print("게시 실패")
+        print("\uac8c\uc2dc \uc2e4\ud328")
         return
     time.sleep(3)
-    print("\n댓글 추가 중...")
+    print("\n\ub313\uae00 \uac8c\uc2dc \uc911...")
     ok_c = post_comment_with_retry(pid, comment)
     if not ok_c:
-        fl = {"post_id":pid,"comment":comment,"failed_at":now.isoformat()}
-        (output_dir/"comment_fail.json").write_text(
-            json.dumps(fl,ensure_ascii=False,indent=2), encoding="utf-8")
-    print(f"\n완료! [{cat['name']}]\n  결과물: {output_dir}")
+        fl = {"post_id": pid, "comment": comment, "failed_at": now.isoformat()}
+        (output_dir / "comment_fail.json").write_text(
+            json.dumps(fl, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n\uc644\ub8cc! [{cat['name']}]\n  \uacb0\uacfc\ubb3c: {output_dir}")
+
 
 if __name__ == "__main__":
     main()
