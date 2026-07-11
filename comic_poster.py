@@ -258,10 +258,13 @@ JSON만 출력:
 "comment_body":"댓글 [PRODUCT] [LINK] 포함"}}"""
 
     msg = client.messages.create(
-        model="claude-sonnet-4-6", max_tokens=1500,
+        model="claude-sonnet-4-6", max_tokens=3000,
         messages=[{"role":"user","content":prompt}],
     )
     raw = msg.content[0].text.strip()
+    # markdown 코드블록 제거
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
     m   = re.search(r"\{.*\}", raw, re.DOTALL)
     if not m:
         raise ValueError(f"JSON 파싱 실패:\n{raw[:300]}")
@@ -473,38 +476,56 @@ def _best_anchor(ptype, script_anchor):
         return script_anchor
     return prefs[0]
 
+def _kr_text_width(font, text):
+    """한글 포함 텍스트의 실제 렌더링 폭 추정 (PIL getlength 우선, 폴백 문자 기반)"""
+    try:
+        return int(font.getlength(text))
+    except AttributeError:
+        pass
+    w = 0
+    for ch in text:
+        w += font.size if ord(ch) > 0x2E7F else max(1, font.size // 2 + 2)
+    return w
+
 def _draw_bubble(draw, text, bx, by, bw, bh, font, anchor="top_right", shape="speech", ptype=""):
     if not text:
         return
     anchor    = _best_anchor(ptype, anchor)
-    max_bub_w = int(bw * 0.48)   # 이전 0.52 → 축소
-    min_bub_w = int(bw * 0.30)   # 이전 0.36 → 축소
-    char_w    = max(1, font.size // 2 + 3)
-    chars_per = max(5, max_bub_w // char_w)
-    lines     = textwrap.wrap(text, width=chars_per)[:3] or [text[:15]]
-    line_h    = font.size + 8
+    max_bub_w = int(bw * 0.48)
+    min_bub_w = int(bw * 0.28)
     pad       = 14
-    bub_w     = max(min_bub_w, min(
-        max(len(l) for l in lines) * char_w + pad * 2, max_bub_w
-    ))
-    bub_h     = len(lines) * line_h + pad * 2
     tail_h    = 14
+
+    # 한글 기준 chars_per: 한글 1글자 ≈ font.size px
+    kr_char_w = max(1, font.size)
+    chars_per  = max(4, max_bub_w // kr_char_w)
+    lines      = textwrap.wrap(text, width=chars_per)[:3] or [text[:12]]
+    line_h     = font.size + 10
+
+    # 실제 텍스트 폭으로 bubble 폭 결정
+    max_line_px = max(_kr_text_width(font, l) for l in lines)
+    bub_w = max(min_bub_w, min(max_line_px + pad * 2, max_bub_w))
+    bub_h = len(lines) * line_h + pad * 2
 
     ax, ay = BUBBLE_ANCHORS.get(anchor, BUBBLE_ANCHORS["top_right"])
     x1 = bx + int(bw * ax)
     y1 = by + int(bh * ay)
 
     # 컷 번호 배지 금지 영역 (좌상단 BADGE_NO_ZONE_W×BADGE_NO_ZONE_H)
-    badge_right  = bx + BADGE_NO_ZONE_W + 4
-    badge_bottom = by + BADGE_NO_ZONE_H + 4
+    badge_right  = bx + BADGE_NO_ZONE_W + 6
+    badge_bottom = by + BADGE_NO_ZONE_H + 6
     if x1 < badge_right and y1 < badge_bottom:
-        # 배지와 겹치면 오른쪽으로 밀기
-        x1 = badge_right
+        x1 = badge_right   # 배지와 겹치면 오른쪽으로 밀기
 
-    # 패널 경계 보정
+    # 패널 경계 강제 보정 — bubble이 절대 패널 밖으로 나가지 않도록
     x1 = max(bx + 6, min(x1, bx + bw - bub_w - 6))
     y1 = max(by + 6, min(y1, by + bh - bub_h - tail_h - 6))
     x2, y2 = x1 + bub_w, y1 + bub_h
+
+    # x2가 패널 우측을 초과하면 bub_w를 줄임
+    if x2 > bx + bw - 6:
+        bub_w = bx + bw - 6 - x1
+        x2    = x1 + bub_w
 
     if shape == "thought":
         draw.rounded_rectangle([x1, y1, x2, y2], radius=bub_h // 2,
