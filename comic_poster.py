@@ -1,7 +1,7 @@
 """
-꿀템연구소 미스터리형 6컷 웹툰 자동화 v4.1
-명세: COWORK_MYSTERY_WEBTOON_SPEC.md + COWORK_WEBTOON_QUALITY_UPGRADE.md
-변경: 2열 그리드, 앵커 말풍선, 샷타입 다양성, 캐릭터 레퍼런스 실전달
+꿀템연구소 미스터리형 8컷 웹툰 자동화 v5.0
+명세: COWORK_2026_07_12_ACTION_BRIEF.md
+변경: 8컷 2열x4행, 개그툰 스타일, 본문/댓글 구조 개선, 캐릭터 일관성 강화
 """
 import os, re, sys, json, time, base64, random, textwrap, shutil
 from pathlib import Path
@@ -38,10 +38,14 @@ _ENV = {k: os.environ.get(k, "") for k in [
     "CLAUDE_API_KEY", "OPENAI_API_KEY",
     "THREADS_ACCESS_TOKEN", "THREADS_USER_ID", "GITHUB_TOKEN",
 ]}
+# THREADS_ACCESS_TOKEN / THREADS_API_TOKEN 둘 다 지원
+if not _ENV["THREADS_ACCESS_TOKEN"]:
+    _ENV["THREADS_ACCESS_TOKEN"] = os.environ.get("THREADS_API_TOKEN", "")
+
 IMAGE_MODEL     = os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")
-IMAGE_QUALITY   = os.environ.get("IMAGE_QUALITY", "medium")
-MAX_RETRIES     = int(os.environ.get("MAX_PANEL_RETRIES", "2"))
-DAILY_IMG_LIMIT = int(os.environ.get("DAILY_IMAGE_LIMIT", "24"))
+IMAGE_QUALITY   = os.environ.get("IMAGE_QUALITY", "high")       # v5: high 기본
+MAX_RETRIES     = int(os.environ.get("MAX_PANEL_RETRIES", "3"))  # v5: 3회
+DAILY_IMG_LIMIT = int(os.environ.get("DAILY_IMAGE_LIMIT", "80")) # v5: 80컷/일
 AUTO_PUBLISH    = os.environ.get("AUTO_PUBLISH", "false").lower() == "true"
 GITHUB_REPO     = "withmenlyn12212/threads-auto-poster"
 GITHUB_BRANCH   = "main"
@@ -62,15 +66,15 @@ MY         = 20          # 상하 마진
 GUTTER     = 12          # 컷 사이 간격
 LOGO_H     = 70          # 하단 로고 바 높이
 GRID_COLS  = 2
-GRID_ROWS  = 3
+GRID_ROWS  = 4   # v5: 8컷 (2열×4행)
 
-# 2열 3행 그리드 계산
-_COL_W = (W - MX * 2 - GUTTER) // GRID_COLS        # ≈ 514px
-_ROW_H = (H - MY * 2 - LOGO_H - GUTTER - GUTTER * (GRID_ROWS - 1)) // GRID_ROWS  # ≈ 591px
+# 2열 4행 그리드 계산
+_COL_W = (W - MX * 2 - GUTTER) // GRID_COLS        # 514px
+_ROW_H = (H - MY * 2 - LOGO_H - GUTTER - GUTTER * (GRID_ROWS - 1)) // GRID_ROWS  # 440px
 LOGO_Y = MY + GRID_ROWS * _ROW_H + (GRID_ROWS - 1) * GUTTER + GUTTER
 
 def get_panel_rects():
-    """2열 3행 그리드: [(x, y, w, h), ...] 6개 순서: 좌상→우상→좌중→우중→좌하→우하"""
+    """2열 4행 그리드: [(x, y, w, h), ...] 8개"""
     rects = []
     for row in range(GRID_ROWS):
         for col in range(GRID_COLS):
@@ -81,21 +85,32 @@ def get_panel_rects():
 
 PANEL_RECTS = get_panel_rects()
 
-# 컬러
-PANEL_BG = ["#FFFDE7","#FFF3E0","#FCE4EC","#E8F5E9","#E3F2FD","#FFF9C4"]
+# 컷별 감정 색 (8컷 순서)
+PANEL_BG = [
+    "#D7CCC8",  # 1: 어두운 답답한 톤
+    "#FFCCBC",  # 2: 당황 리액션
+    "#FFCDD2",  # 3: 짜증 붉은 톤
+    "#EF9A9A",  # 4: 더 망한 상황
+    "#E1BEE7",  # 5: 현타 클로즈업
+    "#B2EBF2",  # 6: ? 박스 수상한 조명
+    "#DCEDC8",  # 7: 밝아진 공간 전후 차이
+    "#FFF9C4",  # 8: CTA 깔끔
+]
 BG_COLOR  = "#FAFAFA"
 BORDER    = "#222222"
 BUBBLE_F  = "#FFFFFF"
 TEXT_C    = "#1A1A1A"
 
-BODY_CTA = [
-    "뭘 사용한 건지는 댓글에서 확인.",
-    "물음표 아이템 정체는 댓글에 있어요.",
-    "뭔지 궁금하면 댓글 확인해보세요.",
-    "정체는 댓글에 적어뒀어요.",
+# v5: 본문은 훅 + 댓글 유도만. 고지문은 댓글로 이동.
+BODY_HOOKS = [
+    "또 수납함 샀는데\n방이 더 좁아진 적 있나요?\n\n물음표의 정체는 댓글 첫 줄에 👇",
+    "바닥이 안 보일 때마다\n수납함만 더 샀던 적 있죠?\n\n근데 문제는 바닥이 아니었어요.\n정체는 댓글 첫 줄에 숨겨둘게요 👇",
+    "집에서만 계속 거슬리는 게 있죠.\n\n물음표의 정체는 댓글에서 확인 👇",
+    "방금 전까지 괜찮았는데\n이상하게 집에서만 계속 신경 쓰이는 것들.\n\n정체는 댓글에 숨겨둘게요 👇",
 ]
-DISCLOSURE = (
-    "※ 이 포스팅은 쿠팡 파트너스 활동의 일환으로,\n"
+# 댓글 고지 (쿠팡 파트너스 정책 준수)
+COMMENT_DISCLOSURE = (
+    "※ 이 댓글은 쿠팡 파트너스 활동의 일환으로,\n"
     "이에 따른 일정액의 수수료를 제공받습니다."
 )
 
@@ -185,12 +200,14 @@ GENERIC_BAD_LINES = [
 HOOK_TOKENS_1  = ["방금","또","왜","진짜","한입","벌써","어?","헐","이게","식었","차가","덥","춥","못","안 되"]
 HOOK_TOKENS_6  = ["댓글","정체","맞힌","숨겨","확인","알려"]
 
+HOOK_TOKENS_8 = ["댓글","정체","맞힌","숨겨","확인","알려","첫 줄","👇"]
+
 def score_dialogue(script) -> int:
     panels = script.get("panels", [])
     lines  = [p.get("text","") for p in panels]
     score  = 100
     if not lines: return 0
-    # 1컷 길이
+    # 1컷 길이 (14자 이하 권장)
     if len(lines[0]) > 16: score -= 15
     # 밋밋한 대사
     for line in lines:
@@ -198,64 +215,66 @@ def score_dialogue(script) -> int:
             score -= 25; break
     # 1컷 훅
     if not any(t in lines[0] for t in HOOK_TOKENS_1): score -= 15
-    # 6컷 CTA
-    if len(lines) >= 6 and not any(t in lines[5] for t in HOOK_TOKENS_6): score -= 20
+    # 마지막 컷 CTA (6컷 or 8컷)
+    last_idx = min(len(lines)-1, 7)
+    if not any(t in lines[last_idx] for t in HOOK_TOKENS_8): score -= 20
     return score
 
-# ── 대본 생성 (Claude) — 확장 스키마 ─────────────────────────
+# ── 대본 생성 (Claude) — 8컷 확장 스키마, 장면 먼저 ──────────
 def generate_script(cat, products, anon_data):
     client = anthropic.Anthropic(api_key=_ENV["CLAUDE_API_KEY"])
-    prompt = f"""너는 꿀템연구소 6컷 웹툰 작가야.
+    prompt = f"""너는 꿀템연구소 8컷 생활 개그툰 작가야.
+이번 웹툰은 정보 설명용 광고가 아니라 짧은 생활 개그툰이다.
 장소: {anon_data['location']} / 불편: {anon_data['problem_area']} / 카테고리: {cat['name']}
 
-[6컷 흐름]
-1 trouble: 공감 생활 불편 (wide, 전체 상황)
-2 try_fail: 기존 시도 실패 (medium, 행동)
-3 insight: 진짜 원인 발견 (closeup, 표정)
-4 mystery: "?" 아이템 등장 (medium, 박스 중심 — 상품명 절대 금지)
-5 result: 달라진 결과 (over_shoulder, 상품 안 보임)
-6 cta: 댓글 유도 (medium, 시청자에게 직접)
+[생성 순서 — 반드시 이 순서로 생각할 것]
+1. 웃긴 상황 한 줄 떠올리기
+2. 8컷 장면(비주얼) 먼저 설계
+3. 각 컷의 시각적 재미 포인트 확인
+4. 마지막에 짧은 대사 삽입
 
-[대사 품질 규칙 — 반드시 지킬 것]
-- 6~14자 중심, 최대 18자
-- 설명문 금지. 실제 사람이 말하는 짧은 구어체
-- 1컷: 스크롤을 멈추게 하는 공감형 훅 ("방금 차렸는데 식었어?" 류)
-- 2컷: 기존 해결책 실패를 짜증/체념으로 ("또 데우면 더 맛없잖아")
-- 3컷: 문제 진짜 원인, 감정 폭발, 또는 반전 깨달음
-- 4컷: ? 박스 등장 — 상품 정체 절대 말하지 않음 ("근데 이건 뭐지?")
-- 5컷: 사용 후 체감 차이를 짧고 강하게 ("어? 방금 한 밥 같아")
-- 6컷: 댓글 확인 유도, 광고처럼 보이지 않게 ("정체는 댓글에 숨겨둘게요")
-- "여러분은 어떻게 하셨어요?" 같은 일반 질문 금지
-- "와","어?","헐","진짜"는 6컷 중 최대 2회
-- 모든 컷 대사 끝 톤을 반복하지 말 것
+[8컷 흐름]
+1 trouble: 과장된 문제 상황 (wide, 전체 공간 보여줌)
+2 reaction: 주인공 리액션 클로즈업 (closeup, 표정 폭발)
+3 try_fail: 흔한 해결 시도 (medium, 행동)
+4 fail_worse: 더 망함, 과장 효과선 (medium, 상황 악화)
+5 insight: 현타/깨달음 (closeup, 배경 흐림)
+6 mystery: ? 박스 등장, 수상한 조명 (medium, 박스 중심)
+7 result: 사용 후 극적 전후 차이 (wide, 공간 달라짐)
+8 cta: 댓글 확인 CTA (medium, 시청자 직접)
 
-[그림 연출 규칙]
-- scene_prompt: 영어, 카메라 거리+배경+행동+표정 상세히
-- 4컷 scene: "large cardboard box with big red ? symbol" 필수
-- 5컷 scene: "before-after contrast, warm satisfied atmosphere, no product visible" 필수
-- 6컷 scene: "character facing viewer, one finger to lips in shhh gesture, or pointing downward hinting at comments"
-- shot_type: wide/medium/closeup/over_shoulder/low_angle (6컷 중 4종류 이상)
-- bubble_anchor: top_left/top_right/middle_left/middle_right/bottom_left/bottom_right
-- bubble_shape: speech/thought/shout
-- dialogue_intent: scroll_stop_empathy/fail_frustration/insight_shock/mystery_curiosity/result_satisfaction/cta_hint
-- emotion_level: 1~5
+[대사 규칙]
+- 6~12자 중심, 최대 14자
+- 설명문 금지, 짧은 구어체
+- 1컷: 스크롤 멈추는 공감 훅
+- 6컷: ? 박스 — 상품 정체 절대 말하지 않음
+- 8컷: 댓글 확인 유도 (광고처럼 보이지 않게)
+- 대사 끝 톤 반복 금지
+- "여러분은 어떻게 하셨어요?" 금지
 
-[기타 규칙]
+[연출 규칙]
+- scene_prompt: 영어, 장면+행동+표정 상세히
+- 6컷 scene: "large cardboard box with big red ? symbol, dramatic spotlight" 필수
+- 7컷 scene: "strong before-after contrast, bright warm light, no product visible, satisfied expression" 필수
+- 8컷 scene: "character faces viewer, shhh gesture or pointing down at comments, friendly wink"
+- shot_type 5종 이상 사용: wide/medium/closeup/over_shoulder/low_angle
 - 상품명/브랜드 절대 금지
-- caption: 120~180자, 상품명 없음, 쿠팡파트너스 고지 포함
-- comment_body: 상품 자리 [PRODUCT], 링크 자리 [LINK]
+- caption: 30~60자, 훅 문장만, 광고 고지 없음
+- comment_body: 상품 [PRODUCT], 링크 [LINK] 포함
 
-JSON만 출력:
+JSON만 출력 (설명 없이):
 {{"panels":[
-  {{"type":"trouble","text":"대사","scene_prompt":"english","shot_type":"wide","camera_angle":"eye_level","bubble_anchor":"top_right","bubble_shape":"speech","background_details":["item1","item2"],"aspect":"1:1","dialogue_intent":"scroll_stop_empathy","emotion_level":3}},
-  {{"type":"try_fail","text":"대사","scene_prompt":"english","shot_type":"medium","camera_angle":"eye_level","bubble_anchor":"top_left","bubble_shape":"speech","background_details":[],"aspect":"1:1","dialogue_intent":"fail_frustration","emotion_level":3}},
-  {{"type":"insight","text":"대사","scene_prompt":"english","shot_type":"closeup","camera_angle":"high_angle","bubble_anchor":"top_right","bubble_shape":"thought","background_details":[],"aspect":"1:1","dialogue_intent":"insight_shock","emotion_level":4}},
-  {{"type":"mystery","text":"대사","scene_prompt":"large cardboard box with big red ? symbol","shot_type":"medium","camera_angle":"eye_level","bubble_anchor":"top_left","bubble_shape":"speech","background_details":["mystery box"],"aspect":"1:1","dialogue_intent":"mystery_curiosity","emotion_level":4}},
-  {{"type":"result","text":"대사","scene_prompt":"before-after contrast warm light no product visible character satisfied","shot_type":"over_shoulder","camera_angle":"diagonal","bubble_anchor":"top_right","bubble_shape":"speech","background_details":[],"aspect":"1:1","dialogue_intent":"result_satisfaction","emotion_level":5}},
-  {{"type":"cta","text":"대사","scene_prompt":"character facing viewer finger to lips shhh gesture or pointing downward","shot_type":"medium","camera_angle":"eye_level","bubble_anchor":"top_left","bubble_shape":"speech","background_details":[],"aspect":"1:1","dialogue_intent":"cta_hint","emotion_level":3}}
+  {{"type":"trouble","text":"대사","scene_prompt":"english scene","shot_type":"wide","camera_angle":"eye_level","bubble_anchor":"top_right","bubble_shape":"speech","background_details":["item1"],"dialogue_intent":"scroll_stop_empathy","emotion_level":3}},
+  {{"type":"reaction","text":"대사","scene_prompt":"english scene","shot_type":"closeup","camera_angle":"eye_level","bubble_anchor":"top_right","bubble_shape":"shout","background_details":[],"dialogue_intent":"shock_reaction","emotion_level":5}},
+  {{"type":"try_fail","text":"대사","scene_prompt":"english scene","shot_type":"medium","camera_angle":"eye_level","bubble_anchor":"top_left","bubble_shape":"speech","background_details":[],"dialogue_intent":"fail_frustration","emotion_level":3}},
+  {{"type":"fail_worse","text":"대사","scene_prompt":"english scene","shot_type":"medium","camera_angle":"low_angle","bubble_anchor":"top_right","bubble_shape":"shout","background_details":[],"dialogue_intent":"fail_worse","emotion_level":4}},
+  {{"type":"insight","text":"대사","scene_prompt":"english scene","shot_type":"closeup","camera_angle":"high_angle","bubble_anchor":"top_right","bubble_shape":"thought","background_details":[],"dialogue_intent":"insight_shock","emotion_level":4}},
+  {{"type":"mystery","text":"대사","scene_prompt":"large cardboard box with big red ? symbol dramatic spotlight","shot_type":"medium","camera_angle":"eye_level","bubble_anchor":"top_left","bubble_shape":"speech","background_details":["mystery box"],"dialogue_intent":"mystery_curiosity","emotion_level":4}},
+  {{"type":"result","text":"대사","scene_prompt":"strong before-after contrast bright warm light no product visible satisfied","shot_type":"wide","camera_angle":"diagonal","bubble_anchor":"top_right","bubble_shape":"speech","background_details":[],"dialogue_intent":"result_satisfaction","emotion_level":5}},
+  {{"type":"cta","text":"대사","scene_prompt":"character faces viewer shhh gesture or pointing down at comments friendly wink","shot_type":"medium","camera_angle":"eye_level","bubble_anchor":"top_left","bubble_shape":"speech","background_details":[],"dialogue_intent":"cta_hint","emotion_level":3}}
 ],
-"caption":"본문 120~180자 쿠팡파트너스 고지 포함",
-"comment_body":"댓글 [PRODUCT] [LINK] 포함"}}"""
+"caption":"훅 문장 30~60자 (광고 고지 없음)",
+"comment_body":"👇 물음표의 정체\n[PRODUCT]\n[LINK]"}}"""
 
     msg = client.messages.create(
         model="claude-sonnet-4-6", max_tokens=3000,
@@ -289,31 +308,39 @@ JSON만 출력:
         raise ValueError(f"JSON 최종 파싱 실패. 원본:\n{raw[:500]}")
 
 # ── 패널 프롬프트 빌더 ─────────────────────────────────────────
+# v5: 개그툰 스타일 강화, 캐릭터 일관성 고정
 _CHAR_BASE = (
-    "Korean vertical webtoon / manga panel, polished anime-inspired illustration, "
-    "expressive Korean male mascot character in his 20s, consistent black hair and round glasses, "
-    "casual everyday outfit, clean confident line art, warm lighting, rich domestic background, "
-    "clear facial expression, exaggerated but natural reaction, clear hand gesture, dynamic body pose, "
-    "foreground midground background depth, detailed props, natural panel composition, "
-    "strong webtoon storytelling, expressive facial acting, "
-    "dramatic focal point, appealing SNS webtoon style, polished Korean webtoon quality, "
-    "readable at mobile size"
+    "expressive Korean slice-of-life comedy webtoon panel, "
+    "high quality polished commercial illustration, "
+    "SAME Korean male character in his 20s: round glasses, black hair, beige knit sweater, "
+    "consistent character design throughout all panels, "
+    "clean thick outline, warm but high-contrast colors, "
+    "exaggerated facial acting and comic reaction poses, "
+    "detailed cluttered home background, "
+    "clear foreground-midground-background separation, "
+    "mobile-readable composition, "
+    "strong visual gag, dramatic lighting, "
+    "not low-budget AI comic, not generic advertisement look"
 )
 _FORBID = (
-    "Do not crop the face, do not crop hands, do not hide the main action, "
-    "do not use horizontal banner composition, "
-    "no text inside image, no caption boxes, no watermark, "
-    "no product brand names logos or package shapes"
+    "no flat generic AI cartoon, no stiff pose, no bland expression, "
+    "no same camera angle repeated, no low detail background, "
+    "no character identity change, no gender change, no over-clean empty room, "
+    "no product reveal, no text baked into the scene, "
+    "no crop on face or hands, no horizontal banner composition, "
+    "no watermark, no product brand names logos or package shapes"
 )
 
-# 컷 타입별 연출 보강
+# v5: 8컷 타입별 연출
 PANEL_TYPE_DIRECTION = {
-    "trouble":  "Character has a 'freeze and stare' surprised pose, problem is visually obvious",
-    "try_fail": "Show the failed action clearly — hand pressing button, disgusted expression, exaggerated frustration",
-    "insight":  "Extreme close-up on face, eyes wide, sweat drop or lightbulb moment, strong emotion line art",
-    "mystery":  "? box is center frame, character and bystander both look intrigued/suspicious, dramatic lighting on box",
-    "result":   "Clear visual before-after contrast — warm colors, steam/glow effect, satisfied smile, improved environment",
-    "cta":      "Character looks directly at viewer, one finger to lips in shhh gesture or pointing downward (hinting at comments), warm friendly expression",
+    "trouble":   "Exaggerated problem scene — character frozen in shock, mess is visually obvious, strong visual impact",
+    "reaction":  "Extreme close-up on face — eyes wide, mouth agape, sweat drop, pure comic reaction shot",
+    "try_fail":  "Character attempting failed solution — hand action visible, disgusted expression, clear fail",
+    "fail_worse":"Even worse outcome — exaggerated effect lines, character more distressed than before",
+    "insight":   "Close-up face lightbulb moment — eyes narrow then wide, realization expression, minimal background",
+    "mystery":   "Large ? box center frame — dramatic spotlight on box, character suspicious and curious",
+    "result":    "Strong before-after contrast — warm bright light, satisfied smile, space looks different",
+    "cta":       "Character faces viewer directly — shhh gesture or finger pointing down at comments, friendly wink",
 }
 
 SHOT_DESC = {
@@ -461,12 +488,14 @@ BADGE_NO_ZONE_H = 42
 
 # 패널 타입별 말풍선 선호 앵커 순서 (점수화)
 PANEL_ANCHOR_PREF = {
-    "trouble":  ["top_right", "bottom_left",  "bottom_right"],
-    "try_fail": ["top_right", "top_left",     "bottom_right"],
-    "insight":  ["top_right", "bottom_right", "middle_right"],
-    "mystery":  ["top_left",  "bottom_left",  "top_right"],
-    "result":   ["top_right", "bottom_right", "middle_right"],
-    "cta":      ["top_left",  "top_right",    "bottom_left"],
+    "trouble":   ["top_right", "bottom_left",  "bottom_right"],
+    "reaction":  ["top_right", "top_left",     "middle_right"],
+    "try_fail":  ["top_right", "top_left",     "bottom_right"],
+    "fail_worse":["top_left",  "top_right",    "bottom_left"],
+    "insight":   ["top_right", "bottom_right", "middle_right"],
+    "mystery":   ["top_left",  "bottom_left",  "top_right"],
+    "result":    ["top_right", "bottom_right", "middle_right"],
+    "cta":       ["top_left",  "top_right",    "bottom_left"],
 }
 
 def _best_anchor(ptype, script_anchor):
@@ -577,7 +606,7 @@ def compose_webtoon(script, panel_paths, output_path, fonts):
     draw   = ImageDraw.Draw(canvas)
     panels = script.get("panels", [])
 
-    for idx, ip in enumerate(panel_paths[:6]):
+    for idx, ip in enumerate(panel_paths[:8]):
         px, py, pw, ph = PANEL_RECTS[idx]
         meta   = panels[idx] if idx < len(panels) else {}
         ptype  = meta.get("type", "")
@@ -632,7 +661,8 @@ def run_quality_check(final_path, script, panel_paths, product, output_dir):
     def ok(k):     rep["checks"][k]="OK"
 
     # 패널 수
-    if len(panel_paths) == 6: ok("panel_count")
+    if len(panel_paths) == 8: ok("panel_count")
+    elif len(panel_paths) >= 6: warn("panel_count", f"패널 수: {len(panel_paths)} (8 권장)")
     else: fail("panel_count", f"패널 수 오류: {len(panel_paths)}")
 
     # 최종 이미지 검사
@@ -680,10 +710,13 @@ def run_quality_check(final_path, script, panel_paths, product, output_dir):
         if len(t) > 20: warn(f"p{i+1}_len", f"컷{i+1} 대사 {len(t)}자")
         else: ok(f"p{i+1}_len")
 
-    # 캡션 고지
+    # v5: 고지문은 댓글에 있어야 함 (caption에는 없어도 됨)
     cap = script.get("caption","")
-    if "수수료" in cap or "파트너스" in cap: ok("disclosure")
-    else: fail("disclosure", "광고 고지 누락")
+    cmnt = script.get("comment_body","")
+    if "수수료" in cmnt or "파트너스" in cmnt: ok("disclosure")
+    else: warn("disclosure", "댓글에 광고 고지 미포함 — 게시 전 확인")
+    if "수수료" in cap or "파트너스" in cap:
+        warn("caption_not_ad_first", "본문에 광고 고지가 포함됨 — 삭제 권장")
 
     # 제휴 링크
     if product.get("link") or product.get("affiliate_url"): ok("affiliate_link")
@@ -831,7 +864,7 @@ def main():
 
     mode = "DRY-RUN" if DRY_RUN else "실제 게시"
     print(f"\n{'='*60}")
-    print(f"꿀템연구소 미스터리 웹툰 v4.2 [{mode}]")
+    print(f"꿀템연구소 미스터리 웹툰 v5.0 [{mode}]")
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"   모델: {IMAGE_MODEL} / 품질: {IMAGE_QUALITY}")
     print(f"   레이아웃: 2열 {GRID_COLS}×{GRID_ROWS} 그리드 ({_COL_W}×{_ROW_H}px/컷)")
@@ -899,38 +932,45 @@ def main():
         ref_b64 = base64.b64encode(REFERENCE_PATH.read_bytes()).decode()
         print(f"\n  캐릭터 기준표 로드: {REFERENCE_PATH.name}")
 
-    # 컷 생성
-    print("\n6컷 이미지 생성 중...")
+    # 컷 생성 (8컷)
+    print("\n8컷 이미지 생성 중...")
     panel_paths, failed = [], []
-    for idx,panel in enumerate(panels[:6]):
+    for idx, panel in enumerate(panels[:8]):
         try:
             panel_paths.append(generate_panel_image(panel, idx, output_dir, ref_b64))
         except Exception as e:
             print(f"  컷{idx+1} 실패: {e}")
             failed.append(idx)
-            blank = Image.new("RGB",(1024,1024),PANEL_BG[idx])
-            bp = output_dir/f"panel_{idx+1:02d}.png"
-            blank.save(bp); panel_paths.append(bp)
+            bg = PANEL_BG[idx % len(PANEL_BG)]
+            blank = Image.new("RGB", (1024, 1024), bg)
+            bp = output_dir / f"panel_{idx+1:02d}.png"
+            blank.save(bp)
+            panel_paths.append(bp)
 
     # 합성
     print("\n최종 웹툰 합성 중...")
     fonts      = _load_fonts()
-    final_path = output_dir/"final_webtoon.png"
+    final_path = output_dir / "final_webtoon.png"
     compose_webtoon(script, panel_paths, final_path, fonts)
 
-    # 캡션
-    base_cap = script.get("caption","")
-    cta      = random.choice(BODY_CTA)
-    caption  = (f"{base_cap}\n\n{cta}\n{DISCLOSURE}"
-                if "수수료" not in base_cap else base_cap)
-    raw_cmnt = script.get("comment_body","[PRODUCT]")
-    comment  = (f"웹툰 속 물음표 아이템\n"
-                f"{raw_cmnt.replace('[PRODUCT]',pname).replace('[LINK]',cat['link'])}\n\n"
-                f"{cat['link']}\n\n"
-                "※ 쿠팡 파트너스 활동을 통해 일정액의 수수료를 제공받을 수 있습니다.")
-    (output_dir/"post_body.txt").write_text(caption, encoding="utf-8")
-    (output_dir/"comment.txt").write_text(comment, encoding="utf-8")
-    print(f"\n캡션 미리보기:\n{'─'*44}\n{caption}\n{'─'*44}")
+    # v5: 본문 = 훅 문장만 (고지 없음), 댓글 = 상품+링크+고지
+    base_cap = script.get("caption", "").strip()
+    # 광고 고지가 실수로 포함됐으면 제거
+    base_cap = re.sub(r"※.*수수료.*", "", base_cap, flags=re.DOTALL).strip()
+    hook     = random.choice(BODY_HOOKS)
+    caption  = base_cap if base_cap else hook
+
+    raw_cmnt = script.get("comment_body", "👇 물음표의 정체\n[PRODUCT]\n[LINK]")
+    comment  = (
+        raw_cmnt
+        .replace("[PRODUCT]", pname)
+        .replace("[LINK]", cat["link"])
+        + f"\n\n{COMMENT_DISCLOSURE}"
+    )
+    (output_dir / "post_body.txt").write_text(caption, encoding="utf-8")
+    (output_dir / "comment.txt").write_text(comment, encoding="utf-8")
+    print(f"\n본문 미리보기:\n{'─'*44}\n{caption}\n{'─'*44}")
+    print(f"\n댓글 미리보기:\n{'─'*44}\n{comment}\n{'─'*44}")
 
     # 품질검사
     print("\n품질검사 실행 중...")
